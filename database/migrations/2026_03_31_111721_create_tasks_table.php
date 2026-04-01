@@ -14,8 +14,9 @@ return new class extends Migration
         Schema::create('tasks', function (Blueprint $table) {
             $table->id();
             $table->string('title');
-            $table->text('description'); // This will store the HTML from CKEditor
-            $table->date('due_date')->nullable();
+            $table->text('description'); 
+            $table->dateTime('due_date')->nullable(); // Removed ->change(), made nullable for safety
+            $table->string('task_attachment')->nullable();
             $table->timestamps();
         });
     }

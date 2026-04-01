@@ -9,10 +9,10 @@ use App\Http\Controllers\TeacherController;
 use App\Http\Controllers\AdminController; 
 use App\Models\Attendance;
 use App\Models\LeaveRequest;
-use App\Models\User;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Auth;
 use App\Services\WhatsAppService;
+use Carbon\Carbon;
 
 // --- Public Landing Page ---
 Route::get('/', function () {
@@ -27,10 +27,11 @@ Route::get('/dashboard', function () {
     if ($user->role === 'hr') return redirect()->route('hr.pending');
     if ($user->role === 'teacher') return redirect()->route('teacher.dashboard');
 
-    // Student Logic
+    // --- Student Dashboard Logic ---
     $userId = $user->id;
     $attendances = Attendance::where('user_id', $userId)->orderBy('attendance_date', 'desc')->get();
-    $leaveRequests = LeaveRequest::where('user_id', $userId)->orderBy('leave_date', 'desc')->get();
+    $leaveRequests = LeaveRequest::where('user_id', $userId)->orderBy('start_date', 'desc')->get();
+    
     $hasMarkedToday = Attendance::where('user_id', $userId)->where('attendance_date', now()->toDateString())->exists();
 
     $startDate = now()->startOfMonth();
@@ -41,7 +42,9 @@ Route::get('/dashboard', function () {
     }
 
     $presentCount = $attendances->where('attendance_date', '>=', $startDate->toDateString())->count();
-    $percentage = ($workdaysCount > 0) ? ($presentCount / $workdaysCount) * 100 : 0;
+    
+    // Calculate percentage based on month-to-date workdays
+    $percentage = ($workdaysCount > 0) ? (($presentCount) / $workdaysCount) * 100 : 0;
 
     if ($percentage >= 90) { $grade = 'A'; $color = 'text-green-600'; }
     elseif ($percentage >= 75) { $grade = 'B'; $color = 'text-blue-600'; }
@@ -51,11 +54,9 @@ Route::get('/dashboard', function () {
     return view('dashboard', compact('hasMarkedToday', 'attendances', 'leaveRequests', 'grade', 'percentage', 'color', 'workdaysCount'));
 })->middleware(['auth'])->name('dashboard');
 
-// --- ADMIN ONLY: GLOBAL OVERSIGHT & STAFF MANAGEMENT ---
+// --- ADMIN ONLY: GLOBAL OVERSIGHT ---
 Route::middleware(['auth', 'role:admin'])->prefix('admin')->group(function () {
     Route::get('/summary', [AdminController::class, 'index'])->name('admin.summary');
-    
-    // Global User List (Students, Teachers, HR)
     Route::get('/users', [AdminController::class, 'userList'])->name('admin.users.index');
 });
 
@@ -63,38 +64,34 @@ Route::middleware(['auth', 'role:admin'])->prefix('admin')->group(function () {
 Route::middleware(['auth', 'role:hr,admin'])->prefix('hr')->group(function () {
     Route::get('/pending', [HRController::class, 'index'])->name('hr.pending');
     Route::post('/approve/{id}', [HRController::class, 'approve'])->name('hr.approve');
-    
-    // Shared Student-only view
+    Route::post('/bulk-approve', [HRController::class, 'bulkApprove'])->name('hr.bulkApprove');
     Route::get('/students', [HRController::class, 'studentList'])->name('admin.students');
+    // Re-verify/Deactivation route
     Route::delete('/users/{id}', [AttendanceController::class, 'destroyUser'])->name('admin.students.destroy');
 });
 
-// --- TEACHER ONLY: TASK MANAGEMENT ---
-// Note: Admin removed from here to restrict assignment power
-Route::middleware(['auth', 'role:teacher'])->prefix('teacher')->group(function () {
-    Route::get('/tasks', [TaskController::class, 'index'])->name('admin.tasks');
-    Route::post('/tasks/store', [TaskController::class, 'store'])->name('admin.tasks.store');
-    Route::get('/tasks/submissions', [TaskController::class, 'viewSubmissions'])->name('admin.tasks.submissions');
+// --- TEACHER & ADMIN: TASK MANAGEMENT ---
+Route::middleware(['auth', 'role:teacher,admin'])->prefix('tasks-management')->group(function () {
+    Route::get('/', [TaskController::class, 'index'])->name('admin.tasks');
+    Route::post('/store', [TaskController::class, 'store'])->name('admin.tasks.store');
+    Route::patch('/{id}/extend', [TaskController::class, 'extendDeadline'])->name('admin.tasks.extend');
+    Route::get('/submissions', [TaskController::class, 'viewSubmissions'])->name('admin.tasks.submissions');
     Route::post('/submissions/{id}/review', [TaskController::class, 'reviewSubmission'])->name('admin.tasks.review');
-    Route::delete('/tasks/{id}', [TaskController::class, 'destroy'])->name('admin.tasks.destroy');
+    Route::delete('/{id}', [TaskController::class, 'destroy'])->name('admin.tasks.destroy');
+    Route::get('/download/{id}', [TaskController::class, 'downloadAttachment'])->name('tasks.download');
 });
 
 // --- SHARED MANAGEMENT: LEAVES & REPORTS ---
 Route::middleware(['auth', 'role:teacher,admin'])->prefix('management')->group(function () {
     Route::get('/dashboard', [TeacherController::class, 'index'])->name('teacher.dashboard');
-
-    // Leave Management
     Route::get('/leaves', function () {
-        $allLeaves = LeaveRequest::with('user')->orderBy('created_at', 'desc')->get();
+        $allLeaves = \App\Models\LeaveRequest::with('user')->orderBy('start_date', 'desc')->get();
         return view('admin.leaves', compact('allLeaves'));
     })->name('admin.leaves');
+    
     Route::post('/leaves/{id}/status', [LeaveController::class, 'updateStatus'])->name('admin.leaves.status');
-
-    // Attendance Reports
     Route::get('/reports', [AttendanceController::class, 'reportIndex'])->name('admin.reports');
     Route::get('/reports/generate', [AttendanceController::class, 'generateReport'])->name('admin.reports.generate');
-    
-    // Logs & Record Deletion
     Route::get('/students/{id}/attendance', [AttendanceController::class, 'manageUserAttendance'])->name('admin.students.attendance');
     Route::delete('/attendance/{id}', [AttendanceController::class, 'destroy'])->name('attendance.destroy');
 });
@@ -103,8 +100,11 @@ Route::middleware(['auth', 'role:teacher,admin'])->prefix('management')->group(f
 Route::middleware(['auth', 'role:student'])->group(function () {
     Route::post('/attendance/store', [AttendanceController::class, 'store'])->name('attendance.store');
     Route::post('/leave/store', [LeaveController::class, 'store'])->name('leave.store');
-    Route::get('/student/tasks', [TaskController::class, 'studentIndex'])->name('tasks.index');
+    
+    // RENAMED ROUTES TO RESOLVE SERIALIZATION CONFLICTS
+    Route::get('/student/tasks', [TaskController::class, 'studentIndex'])->name('tasks.student.index');
     Route::post('/student/tasks/{id}/submit', [TaskController::class, 'submitTask'])->name('tasks.submit');
+    Route::get('/student/tasks/download/{id}', [TaskController::class, 'downloadAttachment'])->name('tasks.student.download');
 });
 
 // --- SHARED PROFILE ROUTES ---

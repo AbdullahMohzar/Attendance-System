@@ -12,7 +12,8 @@ class TaskSubmission extends Model
     protected $fillable = [
         'task_id', 
         'user_id', 
-        'submission_text', 
+        'submission_text',
+        'attachment', 
         'status', 
         'admin_feedback'
     ];

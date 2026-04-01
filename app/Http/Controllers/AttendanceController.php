@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Attendance;
+use App\Models\LeaveRequest; 
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 use App\Models\User;
@@ -33,7 +34,6 @@ class AttendanceController extends Controller
             'check_in_time' => now()->toTimeString(),
         ]);
 
-        // WhatsApp Notification
         if ($user->phone) {
             WhatsAppService::send(
                 $user->phone, 
@@ -65,6 +65,7 @@ class AttendanceController extends Controller
             'attendance_date' => 'required|date|before_or_equal:today',
         ]);
 
+        // CHECK 1: Does attendance already exist?
         $exists = Attendance::where('user_id', $id)
                             ->where('attendance_date', $request->attendance_date)
                             ->exists();
@@ -73,10 +74,21 @@ class AttendanceController extends Controller
             return redirect()->back()->with('error', 'Attendance already exists for this date.');
         }
 
+        // CHECK 2: Is the student on an approved leave for this date? (New Logic)
+        $onLeave = LeaveRequest::where('user_id', $id)
+            ->where('status', 'approved')
+            ->where('start_date', '<=', $request->attendance_date)
+            ->where('end_date', '>=', $request->attendance_date)
+            ->exists();
+
+        if ($onLeave) {
+            return redirect()->back()->with('error', 'Cannot mark attendance; student has an approved leave for this date.');
+        }
+
         Attendance::create([
             'user_id' => $id,
             'attendance_date' => $request->attendance_date,
-            'check_in_time' => '09:00:00', // Default manual time
+            'check_in_time' => '09:00:00',
         ]);
 
         return redirect()->back()->with('success', 'Attendance record added manually.');
@@ -95,16 +107,26 @@ class AttendanceController extends Controller
 
     /**
      * HR/Admin: Completely remove a student account.
+     * UPDATED: Cleaned to ensure no relationship conflicts
      */
     public function destroyUser($id)
     {
         $user = User::findOrFail($id);
         $userName = $user->name;
         
-        // This will also delete related attendances if you have cascade on delete in DB
-        $user->delete();
+        // SAFETY: Prevent deactivating the currently logged-in admin
+        if (auth()->id() == $user->id) {
+            return redirect()->back()->with('error', "System Safety: You cannot revoke your own access.");
+        }
 
-        return redirect()->route('admin.students')->with('success', "Account for $userName has been permanently removed.");
+        // --- THE KEY CHANGE ---
+        // We flip the status to false. Because HRController@index looks for 'is_active' => false,
+        // this user will immediately reappear in the Pending Approvals list.
+        $user->update([
+            'is_active' => false
+        ]);
+
+        return redirect()->back()->with('success', "Access for $userName has been revoked. They are now back in the Pending Approvals queue.");
     }
 
     /**
@@ -126,19 +148,18 @@ class AttendanceController extends Controller
             'end_date' => 'required|date|after_or_equal:start_date', 
         ]);
 
-        $start = Carbon::parse($request->start_date);
+        $fromDate = Carbon::parse($request->start_date);
         $requestedEnd = Carbon::parse($request->end_date);
         $today = Carbon::today();
 
-        if ($start->isFuture()) {
+        if ($fromDate->isFuture()) {
             return redirect()->back()->with('error', 'You cannot generate reports for future dates!');
         }
 
         $actualEnd = $requestedEnd->isFuture() ? $today : $requestedEnd;
 
-        // Weekday count logic (Mon-Fri)
         $workdaysCount = 0;
-        $tempDate = $start->copy();
+        $tempDate = $fromDate->copy();
         while ($tempDate->lte($actualEnd)) {
             if ($tempDate->isWeekday()) { $workdaysCount++; }
             $tempDate->addDay();
@@ -151,14 +172,33 @@ class AttendanceController extends Controller
             $q->whereBetween('attendance_date', [$request->start_date, $request->end_date]);
         }, 'leaveRequests' => function($q) use ($request) {
             $q->where('status', 'approved')
-              ->whereBetween('leave_date', [$request->start_date, $request->end_date]);
+              ->where(function ($query) use ($request) {
+                  $query->whereBetween('start_date', [$request->start_date, $request->end_date])
+                        ->orWhereBetween('end_date', [$request->start_date, $request->end_date])
+                        ->orWhere(function ($sub) use ($request) {
+                            $sub->where('start_date', '<=', $request->start_date)
+                                ->where('end_date', '>=', $request->end_date);
+                        });
+              });
         }])->get();
 
-        $reportData = $students->map(function($student) use ($workdaysCount) {
+        $reportData = $students->map(function($student) use ($workdaysCount, $fromDate, $actualEnd) {
             $present = $student->attendances->count();
-            $leaves = $student->leaveRequests->count();
-            $absent = max(0, $workdaysCount - ($present + $leaves));
+            
+            $leaveDaysCount = 0;
+            foreach ($student->leaveRequests as $leave) {
+                $leaveStart = Carbon::parse($leave->start_date);
+                $leaveEnd = Carbon::parse($leave->end_date);
 
+                $overlapStart = $leaveStart->max($fromDate);
+                $overlapEnd = $leaveEnd->min($actualEnd);
+
+                if ($overlapStart->lte($overlapEnd)) {
+                    $leaveDaysCount += (int)($overlapStart->diffInDays($overlapEnd) + 1);
+                }
+            }
+
+            $absent = max(0, $workdaysCount - ($present + $leaveDaysCount));
             $percentage = ($workdaysCount > 0) ? ($present / $workdaysCount) * 100 : 0;
 
             if ($percentage >= 90) { $grade = 'A'; $color = 'text-green-600'; }
@@ -167,7 +207,7 @@ class AttendanceController extends Controller
             else { $grade = 'D'; $color = 'text-red-600'; }
 
             $student->present_count = $present;
-            $student->leave_count = $leaves;
+            $student->leave_count = $leaveDaysCount;
             $student->absent_count = $absent;
             $student->attendance_percentage = round($percentage, 1);
             $student->grade = $grade;

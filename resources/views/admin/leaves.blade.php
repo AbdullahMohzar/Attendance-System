@@ -15,80 +15,90 @@
         <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
             
             @if(session('success'))
-                <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-700 shadow-sm flex items-center">
+                <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-700 shadow-sm flex items-center rounded-r-xl animate-in fade-in slide-in-from-top-4 duration-300">
                     <span class="mr-2">✅</span>
-                    <span>{{ session('success') }}</span>
+                    <span class="font-bold">{{ session('success') }}</span>
                 </div>
             @endif
 
-            <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg border border-gray-200">
-                <div class="p-6 text-gray-900">
+            <div class="bg-white overflow-hidden shadow-sm sm:rounded-[2rem] border border-gray-100">
+                <div class="p-8 text-gray-900">
                     <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
+                        <table class="min-w-full divide-y divide-gray-100">
+                            <thead class="bg-gray-50/50">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Student Name</th>
-                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Leave Date</th>
-                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Reason</th>
-                                    <th class="px-6 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Status/Action</th>
+                                    <th class="px-6 py-4 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Student</th>
+                                    <th class="px-6 py-4 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Leave Period</th>
+                                    <th class="px-6 py-4 text-center text-[10px] font-black text-gray-400 uppercase tracking-widest">Total Days</th>
+                                    <th class="px-6 py-4 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Reason</th>
+                                    <th class="px-6 py-4 text-center text-[10px] font-black text-gray-400 uppercase tracking-widest">Action / Status</th>
                                 </tr>
                             </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
+                            <tbody class="bg-white divide-y divide-gray-50">
                                 @forelse($allLeaves as $leave)
-                                    <tr class="hover:bg-gray-50 transition duration-150">
+                                    @php
+                                        $start = \Carbon\Carbon::parse($leave->start_date);
+                                        $end = \Carbon\Carbon::parse($leave->end_date);
+                                        
+                                        // ENSURE WHOLE NUMBER: diffInDays + 1 cast to int
+                                        $totalDays = (int) ($start->diffInDays($end) + 1);
+                                        
+                                        $isSingleDay = $leave->start_date === $leave->end_date;
+                                        $status = trim(strtolower($leave->status));
+                                    @endphp
+                                    <tr class="hover:bg-gray-50/50 transition duration-150">
                                         <td class="px-6 py-4 whitespace-nowrap">
-                                            <div class="text-sm font-medium text-gray-900">{{ $leave->user->name }}</div>
-                                            <div class="text-xs text-gray-500">{{ $leave->user->email }}</div>
+                                            <div class="text-sm font-black text-gray-900">{{ $leave->user->name }}</div>
+                                            <div class="text-[10px] font-bold text-gray-400 uppercase tracking-tight">{{ $leave->user->email }}</div>
                                         </td>
                                         
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">
-                                            {{ \Carbon\Carbon::parse($leave->leave_date)->format('M d, Y') }}
-                                        </td>
-                                        
-                                        <td class="px-6 py-4 text-sm text-gray-600 italic">
-                                            "{{ $leave->reason }}"
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-bold">
+                                            @if($isSingleDay)
+                                                {{ $start->format('M d, Y') }}
+                                            @else
+                                                <span class="text-indigo-600">{{ $start->format('M d') }}</span> 
+                                                <span class="mx-1 text-gray-300">→</span> 
+                                                <span class="text-indigo-600">{{ $end->format('M d, Y') }}</span>
+                                            @endif
                                         </td>
 
                                         <td class="px-6 py-4 whitespace-nowrap text-center">
-                                            @php
-                                                $status = trim(strtolower($leave->status));
-                                            @endphp
+                                            <span class="bg-gray-100 text-gray-700 text-[10px] font-black px-3 py-1 rounded-lg">
+                                                {{ $totalDays }} {{ Str::plural('Day', $totalDays) }}
+                                            </span>
+                                        </td>
+                                        
+                                        <td class="px-6 py-4 text-sm text-gray-500 italic">
+                                            "{{ Str::limit($leave->reason, 40) }}"
+                                        </td>
 
+                                        <td class="px-6 py-4 whitespace-nowrap text-center">
                                             @if($status == 'pending')
-                                                <form action="{{ route('admin.leaves.status', $leave->id) }}" method="POST" class="space-y-2">
+                                                <form action="{{ route('admin.leaves.status', $leave->id) }}" method="POST" class="flex flex-col space-y-2">
                                                     @csrf
-                                                    <textarea name="admin_comment" placeholder="Add a comment (optional)..." 
-                                                        class="w-full text-xs border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" 
-                                                        rows="1"></textarea>
+                                                    <input type="text" name="admin_comment" placeholder="Optional feedback..." 
+                                                        class="text-[10px] border-gray-200 rounded-xl focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50/50">
                                                     
-                                                    <div class="flex justify-center space-x-3">
+                                                    <div class="flex justify-center space-x-2">
                                                         <button type="submit" name="status" value="approved"
-                                                                style="background-color: #16a34a !important; color: white !important;" 
-                                                                class="inline-flex items-center px-4 py-1.5 border border-transparent text-xs font-bold rounded-md shadow-sm transition hover:opacity-90">
+                                                            class="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md shadow-emerald-100 transition">
                                                             Approve
                                                         </button>
 
                                                         <button type="submit" name="status" value="rejected"
-                                                                style="background-color: #dc2626 !important; color: white !important;" 
-                                                                class="inline-flex items-center px-4 py-1.5 border border-transparent text-xs font-bold rounded-md shadow-sm transition hover:opacity-90">
+                                                            class="bg-rose-500 hover:bg-rose-600 text-white px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md shadow-rose-100 transition">
                                                             Reject
                                                         </button>
                                                     </div>
                                                 </form>
                                             @else
                                                 <div class="flex flex-col items-center">
-                                                    @if($status == 'approved')
-                                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-800 border border-green-200 uppercase">
-                                                            Approved
-                                                        </span>
-                                                    @else
-                                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800 border border-red-200 uppercase">
-                                                            Rejected
-                                                        </span>
-                                                    @endif
-                                                    
+                                                    <span class="px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border
+                                                        {{ $status == 'approved' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100' }}">
+                                                        {{ ucfirst($status) }}
+                                                    </span>
                                                     @if($leave->admin_comment)
-                                                        <p class="mt-1 text-xs text-gray-500 italic">"{{ $leave->admin_comment }}"</p>
+                                                        <p class="mt-2 text-[10px] text-gray-400 italic">"{{ $leave->admin_comment }}"</p>
                                                     @endif
                                                 </div>
                                             @endif
@@ -96,8 +106,8 @@
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="4" class="px-6 py-10 text-center text-gray-500 italic">
-                                            No leave requests found in the system.
+                                        <td colspan="5" class="px-6 py-20 text-center">
+                                            <div class="text-gray-300 font-black uppercase tracking-[0.3em] text-xs">No Leave Requests Found</div>
                                         </td>
                                     </tr>
                                 @endforelse
